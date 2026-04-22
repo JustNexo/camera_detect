@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 3
+names: ['Barrel', 'Person', 'Red uniform']
+
+roboflow:
+  workspace: 1-6nhrt
+  project: uniform-ilsyn
+  version: 5
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/1-6nhrt/uniform-ilsyn/dataset/5

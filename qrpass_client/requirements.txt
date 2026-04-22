@@ -1,0 +1,5 @@
+opencv-python
+# YOLO11 / веса с C3k2 требуют свежую ultralytics (иначе AttributeError: C3k2)
+ultralytics>=8.3.0
+requests
+python-dotenv

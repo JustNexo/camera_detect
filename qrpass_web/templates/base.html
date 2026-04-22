@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title or "QRPass Admin" }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <style>
+        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen text-slate-800 flex overflow-hidden">
+    
+    {% if user %}
+    <!-- Mobile Sidebar Overlay -->
+    <div id="mobile-sidebar-overlay" class="fixed inset-0 bg-slate-900/60 z-30 hidden md:hidden"></div>
+
+    <!-- Mobile Sidebar -->
+    <aside id="mobile-sidebar" class="fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-slate-900 text-white flex flex-col h-screen shadow-2xl z-40 transform -translate-x-full transition-transform duration-200 ease-out md:hidden">
+        <div class="h-16 flex items-center justify-between px-5 border-b border-slate-800 bg-slate-900">
+            <a href="{{ app_url('/dashboard') }}" class="flex items-center text-white no-underline hover:opacity-90">
+                <i class="fa-solid fa-shield-halved text-blue-500 text-2xl mr-3"></i>
+                <span class="text-xl font-bold tracking-wider">QRPASS</span>
+            </a>
+            <button id="mobile-sidebar-close" type="button" class="w-9 h-9 rounded-lg flex items-center justify-center text-slate-300 hover:bg-slate-800 hover:text-white transition-colors">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+
+        <nav class="flex-1 px-4 space-y-1.5 overflow-y-auto mt-2">
+            <p class="px-2 text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-4">Дашборды</p>
+            <a href="{{ app_url('/dashboard') }}" class="flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all {{ 'bg-blue-600 text-white hover:bg-blue-700 shadow-md' if request.url.path.rstrip('/').endswith('/dashboard') else 'text-slate-300' }}">
+                <i class="fa-solid fa-chart-pie w-6 text-center"></i> Главная
+            </a>
+
+            <p class="px-2 text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-8">Мониторинг</p>
+            <a href="{{ app_url('/cameras') }}" class="flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all {{ 'bg-blue-600 text-white hover:bg-blue-700 shadow-md' if request.url.path.rstrip('/').endswith('/cameras') else 'text-slate-300' }}">
+                <i class="fa-solid fa-video w-6 text-center"></i> Онлайн-камеры
+            </a>
+            <a href="{{ app_url('/status') }}" class="flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all {{ 'bg-blue-600 text-white hover:bg-blue-700 shadow-md' if request.url.path.rstrip('/').endswith('/status') else 'text-slate-300' }}">
+                <i class="fa-solid fa-server w-6 text-center"></i> Статус системы
+            </a>
+
+            <p class="px-2 text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-8">Управление</p>
+            <a href="{{ app_url('/settings') }}" class="flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all {{ 'bg-blue-600 text-white hover:bg-blue-700 shadow-md' if request.url.path.rstrip('/').endswith('/settings') else 'text-slate-300' }}">
+                <i class="fa-solid fa-sliders w-6 text-center"></i> Настройки
+            </a>
+        </nav>
+
+        <div class="p-4 border-t border-slate-800 shrink-0 bg-slate-900 mt-auto">
+            <div class="flex items-center justify-between group">
+                <div class="flex items-center">
+                    <div class="w-9 h-9 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center mr-3 text-sm font-bold shadow-lg">
+                        {{ user.username[:1] | upper }}
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="text-sm font-semibold text-slate-200 group-hover:text-white transition-colors">{{ user.username }}</span>
+                        <span class="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Администратор</span>
+                    </div>
+                </div>
+                <a href="{{ app_url('/logout') }}" class="w-8 h-8 flex items-center justify-center rounded text-slate-400 hover:bg-slate-800 hover:text-white transition-all" title="Выйти">
+                    <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                </a>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Sidebar -->
+    <aside class="w-64 bg-slate-900 text-white flex flex-col hidden md:flex h-screen shrink-0 relative shadow-xl z-20">
+        <div class="h-16 flex items-center px-6 border-b border-slate-800 mb-4 shrink-0 bg-slate-900">
+            <a href="{{ app_url('/dashboard') }}" class="flex items-center text-white no-underline hover:opacity-90">
+                <i class="fa-solid fa-shield-halved text-blue-500 text-2xl mr-3"></i>
+                <span class="text-xl font-bold tracking-wider">QRPASS</span>
+            </a>
+        </div>
+        
+        <nav class="flex-1 px-4 space-y-1.5 overflow-y-auto mt-2">
+            <p class="px-2 text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-4">Дашборды</p>
+            <a href="{{ app_url('/dashboard') }}" class="flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all {{ 'bg-blue-600 text-white hover:bg-blue-700 shadow-md' if request.url.path.rstrip('/').endswith('/dashboard') else 'text-slate-300' }}">
+                <i class="fa-solid fa-chart-pie w-6 text-center"></i> Главная
+            </a>
+            
+            <p class="px-2 text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-8">Мониторинг</p>
+            <a href="{{ app_url('/cameras') }}" class="flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all {{ 'bg-blue-600 text-white hover:bg-blue-700 shadow-md' if request.url.path.rstrip('/').endswith('/cameras') else 'text-slate-300' }}">
+                <i class="fa-solid fa-video w-6 text-center"></i> Онлайн-камеры
+            </a>
+            <a href="{{ app_url('/status') }}" class="flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all {{ 'bg-blue-600 text-white hover:bg-blue-700 shadow-md' if request.url.path.rstrip('/').endswith('/status') else 'text-slate-300' }}">
+                <i class="fa-solid fa-server w-6 text-center"></i> Статус системы
+            </a>
+            
+            <p class="px-2 text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-8">Управление</p>
+            <a href="{{ app_url('/settings') }}" class="flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all {{ 'bg-blue-600 text-white hover:bg-blue-700 shadow-md' if request.url.path.rstrip('/').endswith('/settings') else 'text-slate-300' }}">
+                <i class="fa-solid fa-sliders w-6 text-center"></i> Настройки
+            </a>
+        </nav>
+        
+        <div class="p-4 border-t border-slate-800 shrink-0 bg-slate-900 mt-auto">
+            <div class="flex items-center justify-between group">
+                <div class="flex items-center">
+                    <div class="w-9 h-9 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center mr-3 text-sm font-bold shadow-lg">
+                        {{ user.username[:1] | upper }}
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="text-sm font-semibold text-slate-200 group-hover:text-white transition-colors">{{ user.username }}</span>
+                        <span class="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Администратор</span>
+                    </div>
+                </div>
+                <a href="{{ app_url('/logout') }}" class="w-8 h-8 flex items-center justify-center rounded text-slate-400 hover:bg-slate-800 hover:text-white transition-all" title="Выйти">
+                    <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                </a>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <div class="flex-1 flex flex-col h-screen overflow-hidden relative w-full">
+        <!-- Top header -->
+        <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 md:px-8 shrink-0 z-10 shadow-sm">
+            <div class="flex items-center">
+                <button id="mobile-sidebar-open" type="button" class="mr-3 w-10 h-10 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 md:hidden">
+                    <i class="fa-solid fa-bars"></i>
+                </button>
+                <h1 class="text-xl font-bold text-slate-800 tracking-tight">{% block header_title %}Обзор{% endblock %}</h1>
+            </div>
+            <div class="flex items-center space-x-5">
+                <div class="text-sm text-slate-500 font-medium hidden md:flex items-center bg-slate-100 px-3 py-1.5 rounded-md border border-slate-200">
+                    <i class="fa-regular fa-clock mr-2 text-slate-400"></i> <span id="clock" class="tabular-nums"></span>
+                </div>
+            </div>
+        </header>
+
+        <main class="flex-1 overflow-y-auto p-4 md:p-8 bg-slate-50">
+            <div class="max-w-6xl mx-auto">
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    </div>
+
+    <!-- Обновление часов -->
+    <script>
+        function updateClock() {
+            const now = new Date();
+            const el = document.getElementById('clock');
+            if (el) {
+                el.innerText = now.toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            }
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        (function () {
+            const openBtn = document.getElementById('mobile-sidebar-open');
+            const closeBtn = document.getElementById('mobile-sidebar-close');
+            const sidebar = document.getElementById('mobile-sidebar');
+            const overlay = document.getElementById('mobile-sidebar-overlay');
+            if (!sidebar || !overlay) return;
+
+            function openSidebar() {
+                sidebar.classList.remove('-translate-x-full');
+                overlay.classList.remove('hidden');
+                document.body.classList.add('overflow-hidden');
+            }
+            function closeSidebar() {
+                sidebar.classList.add('-translate-x-full');
+                overlay.classList.add('hidden');
+                document.body.classList.remove('overflow-hidden');
+            }
+
+            if (openBtn) openBtn.addEventListener('click', openSidebar);
+            if (closeBtn) closeBtn.addEventListener('click', closeSidebar);
+            overlay.addEventListener('click', closeSidebar);
+        })();
+    </script>
+    
+    {% else %}
+    <main class="w-full flex items-center justify-center">
+        {% block login_content %}{% endblock %}
+    </main>
+    {% endif %}
+</body>
+</html>

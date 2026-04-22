@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+itsdangerous
+sqlalchemy
+greenlet>=3.0.1
+jinja2
+python-multipart
+bcrypt>=4.0
+python-dotenv
+a2wsgi

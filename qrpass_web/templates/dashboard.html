@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block header_title %}Панель управления{% endblock %}
+
+{% block content %}
+<!-- KPI Карточки -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex items-center">
+        <div class="w-14 h-14 rounded-full bg-red-50 text-red-600 flex items-center justify-center text-2xl mr-5">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+        </div>
+        <div>
+            <p class="text-sm font-semibold text-slate-500 uppercase tracking-wide">Сегодня нарушений</p>
+            <h3 class="text-3xl font-bold text-slate-800 mt-1">{{ today_violations_count }}</h3>
+        </div>
+    </div>
+    
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex items-center">
+        <div class="w-14 h-14 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center text-2xl mr-5">
+            <i class="fa-solid fa-video"></i>
+        </div>
+        <div>
+            <p class="text-sm font-semibold text-slate-500 uppercase tracking-wide">Камер активно</p>
+            <h3 class="text-3xl font-bold text-slate-800 mt-1">{{ active_cameras_count }}</h3>
+        </div>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex items-center">
+        <div class="w-14 h-14 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center text-2xl mr-5">
+            <i class="fa-solid fa-satellite-dish"></i>
+        </div>
+        <div>
+            <p class="text-sm font-semibold text-slate-500 uppercase tracking-wide">Требуют внимания</p>
+            <h3 class="text-3xl font-bold text-slate-800 mt-1">{{ attention_cameras_count }}</h3>
+        </div>
+    </div>
+</div>
+
+<!-- Таблица нарушений -->
+<div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+    <div class="px-6 py-5 border-b border-slate-200 flex justify-between items-center bg-white">
+        <h2 class="font-bold text-lg text-slate-800">История инцидентов</h2>
+        <span class="text-xs font-semibold bg-slate-100 text-slate-600 py-1 px-3 rounded-full border border-slate-200">Последние 200 записей</span>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm text-left">
+            <thead class="bg-slate-50 text-slate-500 font-semibold text-xs uppercase tracking-wider border-b border-slate-200">
+                <tr>
+                    <th class="px-6 py-4">Дата и время</th>
+                    <th class="px-6 py-4">Объект</th>
+                    <th class="px-6 py-4">Камера</th>
+                    <th class="px-6 py-4">Тип нарушения</th>
+                    <th class="px-6 py-4 text-right">Фотофиксация</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+                {% for v in violations %}
+                <tr class="hover:bg-slate-50 transition-colors group">
+                    <td class="px-6 py-4 whitespace-nowrap text-slate-600 font-medium">
+                        <i class="fa-regular fa-calendar-days text-slate-400 mr-2"></i>{{ v.timestamp.strftime("%Y-%m-%d %H:%M:%S") }}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-slate-600">
+                        {{ v.site_name if v.site_name else '—' }}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap font-semibold text-slate-800">
+                        {{ v.camera_name }}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-100">
+                            <i class="fa-solid fa-xmark mr-1.5 opacity-70"></i> {{ v.violation_type }}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 text-right">
+                        {% set img_src = v.image_path if v.image_path.startswith('http') else app_url(v.image_path) %}
+                        <a href="{{ img_src }}" target="_blank" class="inline-block relative rounded-lg overflow-hidden border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                            <img src="{{ img_src }}" class="w-20 h-12 object-cover" alt="Инцидент">
+                            <div class="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-all flex items-center justify-center">
+                                <i class="fa-solid fa-magnifying-glass text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-md"></i>
+                            </div>
+                        </a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="px-6 py-12 text-center">
+                        <div class="inline-flex flex-col items-center justify-center text-slate-400">
+                            <i class="fa-solid fa-clipboard-check text-4xl mb-3 text-emerald-400 opacity-50"></i>
+                            <span class="font-medium text-base">Инцидентов не зафиксировано</span>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

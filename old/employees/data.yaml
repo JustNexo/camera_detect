@@ -1,0 +1,13 @@
+train: E:/ai/camera detect own model/employees/train/images
+val: E:/ai/camera detect own model/employees/valid/images
+test: E:/ai/camera detect own model/employees/test/images
+
+nc: 2
+names: ['Person', 'Red uniform']
+
+roboflow:
+  workspace: 1-6nhrt
+  project: uniform-ilsyn
+  version: 3
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/1-6nhrt/uniform-ilsyn/dataset/3

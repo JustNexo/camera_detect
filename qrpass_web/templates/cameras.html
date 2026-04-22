@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block header_title %}Онлайн-Мониторинг{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <p class="text-slate-500 text-sm font-medium">Один активный MJPEG-поток за раз — выберите объект и камеру.</p>
+</div>
+
+{% if sites %}
+<div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mb-6">
+    <div class="px-4 py-3 border-b border-slate-200 bg-slate-50 flex flex-wrap gap-2 items-center">
+        <span class="text-xs font-bold text-slate-500 uppercase tracking-wider mr-2">Объекты</span>
+        {% for s in sites %}
+        <button type="button"
+                data-site-tab="{{ loop.index0 }}"
+                class="site-tab px-3 py-1.5 rounded-lg text-sm font-semibold border transition-colors
+                {% if loop.first %}bg-blue-600 text-white border-blue-600{% else %}bg-white text-slate-700 border-slate-200 hover:bg-slate-100{% endif %}">
+            <i class="fa-solid fa-building mr-1.5 opacity-70"></i>{{ s.name }}
+            <span class="ml-1 text-xs opacity-80">({{ s.online_count }}/{{ s.total }})</span>
+        </button>
+        {% endfor %}
+    </div>
+    {% for s in sites %}
+    <div class="cam-panels px-4 py-3 border-b border-slate-100 last:border-0 {% if not loop.first %}hidden{% endif %}" data-site-panel="{{ loop.index0 }}">
+        <p class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Камеры</p>
+        <div class="flex flex-wrap gap-2">
+            {% for c in s.cameras %}
+            <button type="button"
+                    class="cam-tab px-3 py-2 rounded-lg text-sm font-medium border transition-colors
+                    {% if loop.first and s is sameas sites[0] %}bg-emerald-600 text-white border-emerald-600{% else %}bg-slate-50 text-slate-800 border-slate-200 hover:border-blue-300{% endif %}"
+                    data-stream-url="{{ stream_live_url(c.stream_site, c.camera_name) }}"
+                    data-cam-label="{{ c.camera_name }}"
+                    data-rule-summary="{{ c.rule_summary }}">
+                <i class="fa-solid fa-video mr-1.5 {% if c.is_online %}text-emerald-500{% else %}text-red-400{% endif %}"></i>
+                {{ c.camera_name }}
+            </button>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col max-w-5xl mx-auto">
+    <div class="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+        <h2 class="font-bold text-slate-800 flex items-center text-lg">
+            <i class="fa-solid fa-video text-slate-400 mr-2"></i>
+            <span id="active-cam-label">{{ default_camera or 'Камера' }}</span>
+        </h2>
+        <div class="flex items-center text-xs text-slate-500">
+            <span class="hidden sm:inline mr-2">Поток загружается только для выбранной камеры</span>
+        </div>
+    </div>
+    <div class="px-4 py-2 border-b border-slate-200 bg-slate-50 text-sm text-slate-700">
+        <i class="fa-solid fa-list-check text-slate-400 mr-2"></i>
+        <span id="active-rule-summary">Правило не передано</span>
+    </div>
+    <div class="relative bg-slate-900 aspect-video w-full flex items-center justify-center">
+        <img id="mjpeg-stream"
+             src=""
+             alt="Поток"
+             class="w-full h-full object-contain"
+             data-placeholder="https://placehold.co/600x400/1e293b/ffffff?text=Выберите+камеру"
+             onerror="this.onerror=null;this.src=this.getAttribute('data-placeholder')||''">
+        <div class="absolute inset-0 pointer-events-none opacity-30">
+            <div class="absolute top-4 left-4 w-6 h-6 border-t-2 border-l-2 border-white"></div>
+            <div class="absolute top-4 right-4 w-6 h-6 border-t-2 border-r-2 border-white"></div>
+            <div class="absolute bottom-4 left-4 w-6 h-6 border-b-2 border-l-2 border-white"></div>
+            <div class="absolute bottom-4 right-4 w-6 h-6 border-b-2 border-r-2 border-white"></div>
+        </div>
+    </div>
+</section>
+
+<script>
+(function () {
+    var img = document.getElementById('mjpeg-stream');
+    var label = document.getElementById('active-cam-label');
+    var ruleLabel = document.getElementById('active-rule-summary');
+    var firstCam = document.querySelector('.cam-tab[data-stream-url]');
+    var activeStreamUrl = '';
+    var reconnectTimer = null;
+    var STREAM_RECONNECT_MS = 25000;
+
+    function withCacheBuster(url) {
+        var sep = url.indexOf('?') >= 0 ? '&' : '?';
+        return url + sep + '_ts=' + Date.now();
+    }
+
+    function startAutoReconnect() {
+        if (reconnectTimer) clearInterval(reconnectTimer);
+        reconnectTimer = setInterval(function () {
+            if (!img || !activeStreamUrl) return;
+            // Мягкий ре-коннект MJPEG: спасает от "залипания" потока у прокси/браузера.
+            img.src = withCacheBuster(activeStreamUrl);
+        }, STREAM_RECONNECT_MS);
+    }
+
+    function setStream(url, name, ruleText) {
+        if (!img) return;
+        activeStreamUrl = url || '';
+        img.removeAttribute('src');
+        img.src = withCacheBuster(activeStreamUrl);
+        if (label && name) label.textContent = name;
+        if (ruleLabel) ruleLabel.textContent = ruleText || 'Правило не передано';
+        startAutoReconnect();
+    }
+
+    document.querySelectorAll('.site-tab').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var idx = btn.getAttribute('data-site-tab');
+            document.querySelectorAll('.site-tab').forEach(function (b) {
+                b.classList.remove('bg-blue-600', 'text-white', 'border-blue-600');
+                b.classList.add('bg-white', 'text-slate-700', 'border-slate-200');
+            });
+            btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600');
+            btn.classList.remove('bg-white', 'text-slate-700', 'border-slate-200');
+            document.querySelectorAll('.cam-panels').forEach(function (p) {
+                p.classList.toggle('hidden', p.getAttribute('data-site-panel') !== idx);
+            });
+        });
+    });
+
+    document.querySelectorAll('.cam-tab').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var panel = btn.closest('.cam-panels');
+            if (panel) {
+                panel.querySelectorAll('.cam-tab').forEach(function (b) {
+                    b.classList.remove('bg-emerald-600', 'text-white', 'border-emerald-600');
+                    b.classList.add('bg-slate-50', 'text-slate-800', 'border-slate-200');
+                });
+            }
+            btn.classList.add('bg-emerald-600', 'text-white', 'border-emerald-600');
+            btn.classList.remove('bg-slate-50', 'text-slate-800', 'border-slate-200');
+            var url = btn.getAttribute('data-stream-url');
+            var cam = btn.getAttribute('data-cam-label') || '';
+            var rule = btn.getAttribute('data-rule-summary') || '';
+            setStream(url, cam, rule);
+        });
+    });
+
+    if (firstCam) {
+        setStream(
+            firstCam.getAttribute('data-stream-url'),
+            firstCam.getAttribute('data-cam-label'),
+            firstCam.getAttribute('data-rule-summary')
+        );
+    } else if (img) {
+        img.src = img.getAttribute('data-placeholder') || '';
+    }
+})();
+</script>
+{% else %}
+<div class="col-span-full py-20 flex flex-col items-center justify-center bg-white rounded-xl border border-dashed border-slate-300">
+    <i class="fa-solid fa-satellite-dish text-6xl text-slate-200 mb-4"></i>
+    <h3 class="text-xl font-bold text-slate-700 mb-2">Нет подключенных камер</h3>
+    <p class="text-slate-500 text-center max-w-md">Запустите локальный клиент <code>qrpass_client</code> для начала трансляции кадров на сервер.</p>
+</div>
+{% endif %}
+{% endblock %}
