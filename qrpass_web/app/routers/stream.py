@@ -28,24 +28,29 @@ def _resolve_frame_key(raw: str) -> str | None:
 
 async def stream_generator(frame_key: str):
     last_sent_frame: bytes | None = None
-    last_sent_at = 0.0
+    last_sent_at = time.monotonic()
+    
+    # Сразу шлём заголовок multipart, чтобы uWSGI/Nginx не отвалились по таймауту (502)
+    yield b"--frame\r\n"
+    
     while True:
         k = _resolve_frame_key(frame_key)
         active_stream_requests[k or frame_key] = time.time()
         frame = latest_frames.get(k) if k else None
         now = time.monotonic()
+        
         should_send = False
-        if frame:
-            # 1) Новый JPEG отправляем сразу.
-            # 2) Тот же JPEG шлём как keepalive раз в STREAM_KEEPALIVE_SECONDS.
-            if frame != last_sent_frame:
-                should_send = True
-            elif now - last_sent_at >= STREAM_KEEPALIVE_SECONDS:
-                should_send = True
-        if should_send:
-            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+        if frame and frame != last_sent_frame:
+            # Новый кадр
+            yield b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n--frame\r\n"
             last_sent_frame = frame
             last_sent_at = now
+        elif now - last_sent_at >= STREAM_KEEPALIVE_SECONDS:
+            # Важно: шлём пустой блок, если нет кадров! 
+            # Иначе WSGI-воркер "зависает" навсегда и не понимает, что клиент закрыл вкладку (Deadlock)
+            yield b"Content-Type: text/plain\r\n\r\n\r\n--frame\r\n"
+            last_sent_at = now
+            
         await asyncio.sleep(STREAM_OUTPUT_INTERVAL)
 
 
@@ -56,8 +61,7 @@ async def camera_stream_live(
     _: object = Depends(get_current_user),
 ):
     key = scope_key(site, camera)
-    if _resolve_frame_key(key) is None:
-        raise HTTPException(status_code=404, detail="Поток камеры пока недоступен")
+    # Удаляем проверку на 404, чтобы соединение "зависло" в ожидании первого кадра (on-demand streaming)
     return StreamingResponse(
         stream_generator(key),
         media_type="multipart/x-mixed-replace; boundary=frame",
@@ -75,10 +79,9 @@ async def camera_stream_live(
 @router.get("/stream/{camera_name:path}")
 async def camera_stream_legacy(camera_name: str, _: object = Depends(get_current_user)):
     """Совместимость: старый URL с одним сегментом = только имя камеры (без объекта)."""
-    if _resolve_frame_key(camera_name) is None:
-        raise HTTPException(status_code=404, detail="Поток камеры пока недоступен")
+    key = scope_key("", camera_name)
     return StreamingResponse(
-        stream_generator(scope_key("", camera_name)),
+        stream_generator(key),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
@@ -98,8 +101,18 @@ async def camera_snapshot(
 ):
     """Один JPEG-кадр для polling в браузере (устойчиво на shared hosting)."""
     key = scope_key(site, camera)
+    
+    # Отмечаем, что кто-то смотрит (клиент получит команду начать стрим в следующем heartbeat)
+    active_stream_requests[_resolve_frame_key(key) or key] = time.time()
+    
+    # Ждём до 5 секунд, если кадра ещё нет
+    for _ in range(10):
+        k = _resolve_frame_key(key)
+        if k and latest_frames.get(k):
+            break
+        await asyncio.sleep(0.5)
+        
     k = _resolve_frame_key(key)
-    active_stream_requests[k or key] = time.time()
     if k is None:
         raise HTTPException(status_code=404, detail="Кадр камеры пока недоступен")
     frame = latest_frames.get(k)
