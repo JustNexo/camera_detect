@@ -2,10 +2,16 @@
 venv/
 env/
 .env
-
+.venv-onnx-test/
+**/.venv*
+**/venv/
+**/build
+**/dist
 # Кэш питона
-__pycache__/
+**/__pycache__/
 *.pyc
+# Папка с релизом
+**/release/
 
 # База данных (если не хотите пушить логи нарушений)
 *.sqlite
@@ -22,3 +28,4 @@ runs/
 # Веса нейросетей (Они слишком тяжелые для Git!)
 *.pt
 *.onnx
+.venv-onnx-test/Lib/site-packages/certifi-2026.4.22.dist-info/RECORD

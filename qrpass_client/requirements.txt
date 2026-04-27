@@ -3,3 +3,4 @@ opencv-python
 ultralytics>=8.3.0
 requests
 python-dotenv
+openpyxl>=3.1.0

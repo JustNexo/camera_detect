@@ -8,6 +8,11 @@
 
 Заголовок `X-API-Token` должен совпадать с `CLIENT_API_TOKEN` на хостинге.
 
+Для Linux mini-PC по текущему ТЗ можно оставить детекцию в `qrpass_client`, а транспорт
+вести через локальный `qrpass_edge`: задайте `EDGE_BRIDGE_URL=http://127.0.0.1:8088`.
+Тогда `heartbeat/stream/violation` идут сначала в edge (локально), а edge отправляет на сайт
+и буферизует оффлайн.
+
 **Полная пошаговая установка на объект (Linux, venv, `.env`, `best.pt`, проверки):** см. [DEPLOY_OBJECT.md](DEPLOY_OBJECT.md).
 
 ### Режим как на старом объекте (`mdb.py`, `users.db`)
@@ -69,6 +74,49 @@ Telegram-бот (`jdb.py`) можно оставить для управлени
 ```bash
 python main.py
 ```
+
+## Сборка Windows `.exe` (без исходников рядом)
+
+> Важно: упаковка в exe скрывает исходники от обычного пользователя, но не является полной защитой от реверса.
+
+1. Откройте PowerShell в `qrpass_client`.
+2. Соберите клиент:
+
+```powershell
+.\build_exe.ps1 -EntryPoint main.py -ExeName QRPassClient
+```
+
+Для GUI-лаунчера:
+
+```powershell
+.\build_exe.ps1 -EntryPoint gui.py -ExeName QRPassLauncher -Windowed
+```
+
+Результат: папка `dist\QRPassClient\` (или `dist\QRPassLauncher\`) + `.env.example`.
+
+Для полного релиз-пакета под Windows без Python:
+
+```powershell
+.\package_windows_release.ps1 -ExeName QRPassClient
+```
+
+См. также: [DEPLOY_WINDOWS_NO_PYTHON.md](DEPLOY_WINDOWS_NO_PYTHON.md).
+
+## Импорт камер из Excel в SQLite (`Cameras`)
+
+Если есть файл вроде `IP_Cams_FFO4.xlsx`, можно сгенерировать SQL:
+
+```bash
+pip install openpyxl
+python scripts/xlsx_to_cameras_sql.py --xlsx "C:\path\IP_Cams_FFO4.xlsx" --out "sql\update_cameras_from_xlsx.sql"
+```
+
+Скрипт читает по умолчанию:
+- имя камеры из колонки 8
+- RTSP URL из колонки 9
+- данные начиная со строки 2
+
+Далее выполните полученный SQL в `users.db`.
 
 Графический лаунчер (правка полей, старт/стоп, лог):
 

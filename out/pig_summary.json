@@ -1,0 +1,16 @@
+{
+  "model": "E:\\crypt\\pigs_train\\best.onnx",
+  "video": "E:\\crypt\\pigs_train\\test2.mp4",
+  "line_y_ratio": 0.58,
+  "direction": "up",
+  "total_count": 2,
+  "events_count": 2,
+  "frames_processed": 2000,
+  "video_fps": 25.013,
+  "video_duration_seconds": 79.96,
+  "processing_seconds": 121.92,
+  "processing_fps": 16.404,
+  "realtime_factor": 0.656,
+  "events_csv": "E:\\crypt\\out\\pig_events.csv",
+  "preview_video": "E:\\crypt\\out\\pig_preview.mp4"
+}

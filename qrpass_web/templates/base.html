@@ -41,6 +41,9 @@
             <a href="{{ app_url('/status') }}" class="flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all {{ 'bg-blue-600 text-white hover:bg-blue-700 shadow-md' if request.url.path.rstrip('/').endswith('/status') else 'text-slate-300' }}">
                 <i class="fa-solid fa-server w-6 text-center"></i> Статус системы
             </a>
+            <a href="{{ app_url('/pig-count') }}" class="flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all {{ 'bg-blue-600 text-white hover:bg-blue-700 shadow-md' if request.url.path.rstrip('/').endswith('/pig-count') else 'text-slate-300' }}">
+                <i class="fa-solid fa-list-ol w-6 text-center"></i> Подсчет свиней
+            </a>
 
             <p class="px-2 text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-8">Управление</p>
             <a href="{{ app_url('/settings') }}" class="flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all {{ 'bg-blue-600 text-white hover:bg-blue-700 shadow-md' if request.url.path.rstrip('/').endswith('/settings') else 'text-slate-300' }}">
@@ -87,6 +90,9 @@
             </a>
             <a href="{{ app_url('/status') }}" class="flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all {{ 'bg-blue-600 text-white hover:bg-blue-700 shadow-md' if request.url.path.rstrip('/').endswith('/status') else 'text-slate-300' }}">
                 <i class="fa-solid fa-server w-6 text-center"></i> Статус системы
+            </a>
+            <a href="{{ app_url('/pig-count') }}" class="flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all {{ 'bg-blue-600 text-white hover:bg-blue-700 shadow-md' if request.url.path.rstrip('/').endswith('/pig-count') else 'text-slate-300' }}">
+                <i class="fa-solid fa-list-ol w-6 text-center"></i> Подсчет свиней
             </a>
             
             <p class="px-2 text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-8">Управление</p>

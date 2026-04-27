@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.urls import app_url
-from app.models import CameraPresence, User, Violation, SystemSettings
+from app.models import CameraPresence, PigCountEvent, User, Violation, SystemSettings
 from app.templating import templates
 
 router = APIRouter(tags=["pages"])
@@ -159,6 +159,52 @@ def status_page(
     )
 
 
+@router.get("/pig-count")
+def pig_count_page(
+    request: Request,
+    date_from: str = "",
+    date_to: str = "",
+    site_name: str = "",
+    camera_name: str = "",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    q = db.query(PigCountEvent)
+    if site_name.strip():
+        q = q.filter(PigCountEvent.site_name == site_name.strip())
+    if camera_name.strip():
+        q = q.filter(PigCountEvent.camera_name == camera_name.strip())
+    if date_from.strip():
+        try:
+            dt_from = datetime.strptime(date_from.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            q = q.filter(PigCountEvent.ts_to >= dt_from)
+        except ValueError:
+            pass
+    if date_to.strip():
+        try:
+            dt_to = datetime.strptime(date_to.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            dt_to = dt_to.replace(hour=23, minute=59, second=59)
+            q = q.filter(PigCountEvent.ts_from <= dt_to)
+        except ValueError:
+            pass
+    events = q.order_by(PigCountEvent.ts_to.desc()).limit(500).all()
+    total_count = sum(int(e.count or 0) for e in events)
+
+    return templates.TemplateResponse(
+        request,
+        "pig_count.html",
+        {
+            "user": current_user,
+            "events": events,
+            "total_count": total_count,
+            "date_from": date_from,
+            "date_to": date_to,
+            "site_name": site_name,
+            "camera_name": camera_name,
+        },
+    )
+
+
 @router.get("/settings")
 def settings_page(
     request: Request,
@@ -184,6 +230,8 @@ def save_settings(
     request: Request,
     email_enabled: str = Form(default="off"),
     target_email: str = Form(...),
+    pc_inactive_alert_enabled: str = Form(default="off"),
+    pc_inactive_threshold_hours: int = Form(default=24),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -194,6 +242,8 @@ def save_settings(
 
     settings.email_enabled = email_enabled == "on"
     settings.target_email = target_email
+    settings.pc_inactive_alert_enabled = pc_inactive_alert_enabled == "on"
+    settings.pc_inactive_threshold_hours = pc_inactive_threshold_hours
     db.commit()
 
     return RedirectResponse(url=app_url("/settings?success=1"), status_code=303)

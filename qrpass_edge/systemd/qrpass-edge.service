@@ -1,0 +1,20 @@
+[Unit]
+Description=QRPass Edge — локальный UI и очередь отправки
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qrpass
+Group=qrpass
+WorkingDirectory=/opt/qrpass_edge
+EnvironmentFile=-/etc/qrpass/edge.env
+ExecStart=/opt/qrpass_edge/.venv/bin/python -m app.main
+Restart=on-failure
+RestartSec=5
+
+# Писать очередь и снимки (настройте пути в edge.env)
+ReadWritePaths=/var/lib/qrpass
+
+[Install]
+WantedBy=multi-user.target

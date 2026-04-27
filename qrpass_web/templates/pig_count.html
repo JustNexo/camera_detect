@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block header_title %}Подсчет свиней{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+        <h2 class="text-lg font-bold text-slate-800">События выноса (direction=up)</h2>
+        <p class="text-sm text-slate-500 mt-1">Показываются агрегированные события: количество и один превью-кадр.</p>
+        <form method="get" action="{{ app_url('/pig-count') }}" class="mt-4 grid grid-cols-1 md:grid-cols-5 gap-3">
+            <input type="date" name="date_from" value="{{ date_from }}" class="px-3 py-2 rounded-lg border border-slate-300">
+            <input type="date" name="date_to" value="{{ date_to }}" class="px-3 py-2 rounded-lg border border-slate-300">
+            <input type="text" name="site_name" value="{{ site_name }}" placeholder="Объект" class="px-3 py-2 rounded-lg border border-slate-300">
+            <input type="text" name="camera_name" value="{{ camera_name }}" placeholder="Камера" class="px-3 py-2 rounded-lg border border-slate-300">
+            <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-4 py-2 font-semibold">Применить</button>
+        </form>
+        <div class="mt-4 text-sm text-slate-700">
+            <span class="font-semibold">Итого за выборку:</span> {{ total_count }}
+        </div>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+                <thead class="bg-slate-50 border-b border-slate-200 text-slate-600">
+                    <tr>
+                        <th class="text-left px-4 py-3">Время</th>
+                        <th class="text-left px-4 py-3">Объект</th>
+                        <th class="text-left px-4 py-3">Камера</th>
+                        <th class="text-left px-4 py-3">Кол-во</th>
+                        <th class="text-left px-4 py-3">Период события</th>
+                        <th class="text-left px-4 py-3">Превью</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for e in events %}
+                    <tr class="border-b border-slate-100">
+                        <td class="px-4 py-3">{{ e.created_at.strftime("%Y-%m-%d %H:%M:%S") if e.created_at else "-" }}</td>
+                        <td class="px-4 py-3">{{ e.site_name or "—" }}</td>
+                        <td class="px-4 py-3">{{ e.camera_name }}</td>
+                        <td class="px-4 py-3 font-semibold">{{ e.count }}</td>
+                        <td class="px-4 py-3">
+                            {{ e.ts_from.strftime("%H:%M:%S") if e.ts_from else "-" }}
+                            →
+                            {{ e.ts_to.strftime("%H:%M:%S") if e.ts_to else "-" }}
+                        </td>
+                        <td class="px-4 py-3">
+                            {% if e.preview_path %}
+                            <a href="{{ e.preview_path }}" target="_blank" class="text-blue-600 hover:underline">Открыть</a>
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% if not events %}
+                    <tr><td colspan="6" class="px-4 py-6 text-slate-500">Событий пока нет.</td></tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

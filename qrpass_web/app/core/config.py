@@ -57,6 +57,10 @@ class Settings:
     # Лимиты RAM: JPEG в памяти на /stream (см. app.state.latest_frames)
     stream_frame_max_bytes: int = int(os.getenv("STREAM_FRAME_MAX_BYTES", str(400 * 1024)))
     stream_frames_max_entries: int = int(os.getenv("STREAM_FRAMES_MAX_ENTRIES", "48"))
+    # Лимит одновременных /stream/live в одном воркере (защита от RAM spikes).
+    stream_live_max_connections: int = int(os.getenv("STREAM_LIVE_MAX_CONNECTIONS", "20"))
+    # Жёсткий TTL одного live-stream соединения (сек), затем клиент переподключится.
+    stream_live_max_seconds: int = int(os.getenv("STREAM_LIVE_MAX_SECONDS", "600"))
     # Дашборд: сколько строк истории поднимать из БД (меньше — меньше памяти на запрос).
     dashboard_violations_limit: int = int(os.getenv("DASHBOARD_VIOLATIONS_LIMIT", "80"))
     # POST /api/violation: макс. размер файла нарушения (байты).

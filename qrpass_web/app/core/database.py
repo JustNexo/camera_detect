@@ -26,6 +26,7 @@ Base = declarative_base()
 # Все ORM-модели должны быть импортированы до create_all, иначе таблицы не попадут в metadata
 # (например при нестандартной точке входа WSGI/тестах).
 import app.models.camera_presence  # noqa: E402, F401
+import app.models.pig_count_event  # noqa: E402, F401
 import app.models.system_settings  # noqa: E402, F401
 import app.models.user  # noqa: E402, F401
 import app.models.violation  # noqa: E402, F401

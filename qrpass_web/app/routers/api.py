@@ -10,31 +10,46 @@ from sqlalchemy.orm import Session
 from app.camera_scope import scope_key
 from app.core.config import settings
 from app.core.database import get_db
-from app.models import CameraPresence, SystemSettings, Violation
+from app.models import CameraPresence, PigCountEvent, SystemSettings, Violation
 from app.services.email_service import send_violation_email
-from app.state import camera_rules, camera_status, store_latest_frame, active_stream_requests
+from app.state import camera_rules, camera_status, store_latest_frame, is_stream_requested
 
 router = APIRouter(prefix="/api", tags=["api"])
 
 
+last_db_write: dict[str, float] = {}
+
 def _upsert_camera_presence(db: Session, key: str, rule_summary: str) -> None:
     """Обновление last_seen и (опционально) правила — одна БД для всех воркеров."""
     now = datetime.now(timezone.utc)
-    row = db.query(CameraPresence).filter(CameraPresence.scope_key == key).first()
-    rs = (rule_summary or "").strip()
-    if row:
-        row.last_seen = now
-        if rs:
-            row.rule_summary = rs
-    else:
-        db.add(
-            CameraPresence(
-                scope_key=key,
-                last_seen=now,
-                rule_summary=rs or "Правило не передано",
+    now_ts = now.timestamp()
+    
+    # Троттлинг записи в БД (не чаще 1 раза в 15 секунд на воркер)
+    last_write = last_db_write.get(key, 0.0)
+    if (now_ts - last_write) < 15.0:
+        return
+    last_db_write[key] = now_ts
+
+    try:
+        row = db.query(CameraPresence).filter(CameraPresence.scope_key == key).first()
+        rs = (rule_summary or "").strip()
+        if row:
+            row.last_seen = now
+            if rs:
+                row.rule_summary = rs
+        else:
+            db.add(
+                CameraPresence(
+                    scope_key=key,
+                    last_seen=now,
+                    rule_summary=rs or "Правило не передано",
+                )
             )
-        )
-    db.commit()
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        # Если база залочена, просто пропускаем эту запись, запишем в следующий раз
+        print(f"Warning: Failed to update camera presence in DB: {e}")
 
 
 def verify_api_token(x_api_token: str | None = Header(default=None)) -> None:
@@ -121,10 +136,7 @@ def heartbeat(
         camera_rules[key] = rule_summary.strip()
     _upsert_camera_presence(db, key, rule_summary)
 
-    stream_requested = False
-    last_req = active_stream_requests.get(key, 0.0)
-    if time.time() - last_req < 20.0:
-        stream_requested = True
+    stream_requested = is_stream_requested(key)
 
     return {
         "ok": True,
@@ -193,13 +205,62 @@ async def violation(
     asyncio.create_task(
         asyncio.to_thread(
             send_violation_email,
-            camera_name,
-            violation_type,
-            timestamp,
-            str(file_path),
-            email_enabled,
-            target_email,
-            db_violation.site_name or "",
+            camera_name=camera_name,
+            violation_type=violation_type,
+            timestamp=timestamp,
+            image_path=str(file_path),
+            email_enabled=email_enabled,
+            target_email=target_email,
+            site_name=db_violation.site_name or "",
         )
     )
     return {"ok": True, "id": db_violation.id}
+
+
+@router.post("/pig_count", dependencies=[Depends(verify_api_token)])
+async def pig_count(
+    camera_name: str = Form(...),
+    count: int = Form(...),
+    ts_from: float = Form(...),
+    ts_to: float = Form(...),
+    site_name: str = Form(""),
+    direction: str = Form("up"),
+    line_y_ratio: float = Form(0.58),
+    preview: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    c = int(count or 0)
+    if c <= 0:
+        raise HTTPException(status_code=400, detail="count должен быть > 0")
+    output_dir = Path("static/pig_count")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    preview_path = ""
+    if preview is not None:
+        content = await preview.read()
+        max_v = max(256 * 1024, int(getattr(settings, "violation_upload_max_bytes", 6 * 1024 * 1024)))
+        if len(content) > max_v:
+            raise HTTPException(status_code=413, detail="Слишком большой файл")
+        suffix = Path(preview.filename or "pig_preview.jpg").suffix or ".jpg"
+        file_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}{suffix}"
+        file_path = output_dir / file_name
+        with file_path.open("wb") as f:
+            f.write(content)
+        preview_path = f"/static/pig_count/{file_name}"
+
+    dt_from = datetime.fromtimestamp(float(ts_from), tz=timezone.utc)
+    dt_to = datetime.fromtimestamp(float(ts_to), tz=timezone.utc)
+    event = PigCountEvent(
+        site_name=(site_name or "").strip(),
+        camera_name=camera_name,
+        direction=(direction or "up").strip() or "up",
+        line_y_ratio=float(line_y_ratio),
+        count=c,
+        ts_from=dt_from,
+        ts_to=dt_to,
+        preview_path=preview_path,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return {"ok": True, "id": event.id}

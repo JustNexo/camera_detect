@@ -4,7 +4,9 @@ import sqlite3
 import threading
 import time
 from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import cv2
 import requests
@@ -19,6 +21,9 @@ if os.getenv("RTSP_TRANSPORT_TCP", "").strip().lower() in ("1", "true", "yes"):
 
 SERVER_URL = os.getenv("SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
 API_TOKEN = os.getenv("API_TOKEN", "change_me_api_token")
+# Если задано (например http://127.0.0.1:8088), отправка идёт через локальный qrpass_edge.
+# Детекция и цикл остаются в qrpass_client; edge только транспорт/очередь.
+EDGE_BRIDGE_URL = os.getenv("EDGE_BRIDGE_URL", "").strip().rstrip("/")
 CAMERA_NAME = os.getenv("CAMERA_NAME", "Камера 1")
 # Имя объекта / площадки на сервере (группировка камер и статус по объекту). Пусто = «Без объекта».
 SITE_NAME = os.getenv("SITE_NAME", "").strip()
@@ -57,6 +62,85 @@ RTSP_RECONNECT_SECONDS = float(os.getenv("RTSP_RECONNECT_SECONDS", "0") or 0)
 RTSP_USE_SNAPSHOT = os.getenv("RTSP_USE_SNAPSHOT", "").strip().lower() in ("1", "true", "yes")
 
 API_HEADERS = {"X-API-Token": API_TOKEN}
+
+PIG_COUNT_ENABLED = os.getenv("PIG_COUNT_ENABLED", "").strip().lower() in ("1", "true", "yes")
+PIG_COUNT_MODEL_PATH = os.getenv("PIG_COUNT_MODEL_PATH", "").strip() or YOLO_MODEL_PATH
+PIG_COUNT_DB_PATH = os.getenv("PIG_COUNT_DB_PATH", os.getenv("SQLITE_DB_PATH", "users.db")).strip()
+PIG_COUNT_LINE_Y_RATIO = float(os.getenv("PIG_COUNT_LINE_Y_RATIO", "0.58"))
+PIG_COUNT_INFER_INTERVAL_SECONDS = float(os.getenv("PIG_COUNT_INFER_INTERVAL_SECONDS", "0.5"))
+PIG_COUNT_CONF_THRESHOLD = float(os.getenv("PIG_COUNT_CONF_THRESHOLD", "0.35"))
+PIG_COUNT_BATCH_GAP_SECONDS = float(os.getenv("PIG_COUNT_BATCH_GAP_SECONDS", "10"))
+PIG_COUNT_DIRECTION = "up"
+PIG_COUNT_CLASS_ID_RAW = (os.getenv("PIG_COUNT_CLASS_ID") or "").strip()
+PIG_COUNT_CLASS_ID = int(PIG_COUNT_CLASS_ID_RAW) if PIG_COUNT_CLASS_ID_RAW else None
+PIG_COUNT_CLASS_NAME = (os.getenv("PIG_COUNT_CLASS_NAME") or "").strip()
+
+
+@dataclass
+class _PigTrackState:
+    last_cy: float
+    counted: bool = False
+
+
+@dataclass
+class _PigCounterRuntime:
+    line_y_ratio: float
+    camera_name: str
+    states: dict[int, _PigTrackState]
+    pending_count: int = 0
+    batch_started_ts: float = 0.0
+    batch_last_ts: float = 0.0
+    last_infer_ts: float = 0.0
+    last_preview_bytes: bytes | None = None
+
+
+def _load_pig_camera_allowlist_from_db(db_path_raw: str) -> set[str]:
+    p = Path(expanded(db_path_raw)).resolve()
+    if not p.is_file():
+        print(f"[PigCount] users.db не найден: {p}")
+        return set()
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(str(p))
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pig_count_cameras (
+                camera_name TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at REAL NOT NULL DEFAULT (strftime('%s','now'))
+            )
+            """
+        )
+        conn.commit()
+        rows = conn.execute(
+            "SELECT camera_name FROM pig_count_cameras WHERE enabled = 1"
+        ).fetchall()
+        return {_safe_camera_name(r["camera_name"]) for r in rows if str(r["camera_name"] or "").strip()}
+    except sqlite3.Error as e:
+        print(f"[PigCount] Ошибка чтения pig_count_cameras: {e}")
+        return set()
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _use_edge_bridge() -> bool:
+    return bool(EDGE_BRIDGE_URL)
+
+
+def _should_send_stream_now(camera_name: str, now_ts: float) -> bool:
+    # В bridge-режиме preview нужен локально на edge всегда,
+    # поэтому не ждём server-side stream_requested.
+    if _use_edge_bridge():
+        return True
+    return (now_ts - requested_streams.get(camera_name, 0.0)) < 15.0
+
+
+def _edge_checks_csv() -> str:
+    # Не навязываем проверки из клиента в edge.
+    # Реальная настройка "что делает камера" задаётся оператором в edge UI.
+    return ""
 
 
 def _open_video_capture_raw(source: str) -> cv2.VideoCapture:
@@ -154,16 +238,29 @@ def _camera_rule_summary(camera_id: int | None) -> str:
             pass
 
 
-def send_heartbeat(camera_name: str, rule_summary: str = "") -> None:
+def send_heartbeat(camera_name: str, rule_summary: str = "", camera_address: str = "") -> None:
     try:
-        r = requests.post(
-            f"{SERVER_URL}/api/heartbeat",
-            headers=API_HEADERS,
-            data={**_api_scope_data(camera_name), "rule_summary": rule_summary},
-            timeout=5,
-        )
+        if _use_edge_bridge():
+            r = requests.post(
+                f"{EDGE_BRIDGE_URL}/api/local/heartbeat",
+                params={
+                    "camera_name": _safe_camera_name(camera_name),
+                    "rule_summary": rule_summary,
+                    "camera_address": camera_address or "",
+                    "checks_csv": _edge_checks_csv(),
+                },
+                timeout=5,
+            )
+        else:
+            r = requests.post(
+                f"{SERVER_URL}/api/heartbeat",
+                headers=API_HEADERS,
+                data={**_api_scope_data(camera_name), "rule_summary": rule_summary},
+                timeout=5,
+            )
         if r.status_code >= 400:
-            print(f"[Heartbeat] {camera_name}: HTTP {r.status_code} — проверьте SERVER_URL (если сайт в подкаталоге — включите его в URL) и API_TOKEN")
+            target = "EDGE_BRIDGE_URL" if _use_edge_bridge() else "SERVER_URL/API_TOKEN"
+            print(f"[Heartbeat] {camera_name}: HTTP {r.status_code} — проверьте {target}")
         else:
             try:
                 data = r.json()
@@ -175,11 +272,17 @@ def send_heartbeat(camera_name: str, rule_summary: str = "") -> None:
         print(f"[Heartbeat] {camera_name}: {exc}")
 
 
-def send_heartbeat_loop(camera_names: list[str], stop_event: threading.Event, rule_map: dict[str, str] | None = None) -> None:
+def send_heartbeat_loop(
+    camera_names: list[str],
+    stop_event: threading.Event,
+    rule_map: dict[str, str] | None = None,
+    source_map: dict[str, str] | None = None,
+) -> None:
     rm = rule_map or {}
+    sm = source_map or {}
     while not stop_event.is_set():
         for i, name in enumerate(camera_names):
-            send_heartbeat(name, rm.get(name, ""))
+            send_heartbeat(name, rm.get(name, ""), sm.get(name, ""))
             if i < len(camera_names) - 1 and HEARTBEAT_STAGGER_SECONDS > 0:
                 stop_event.wait(HEARTBEAT_STAGGER_SECONDS)
         stop_event.wait(HEARTBEAT_INTERVAL_SECONDS)
@@ -206,13 +309,23 @@ def draw_boxes(frame, results):
     return results[0].plot()
 
 
-def send_stream_frame(frame_bytes: bytes, camera_name: str, rule_summary: str = "") -> None:
+def send_stream_frame(frame_bytes: bytes, camera_name: str, rule_summary: str = "", camera_address: str = "") -> None:
     try:
         files = {"frame": ("frame.jpg", frame_bytes, "image/jpeg")}
-        data = {**_api_scope_data(camera_name), "rule_summary": rule_summary}
-        r = requests.post(f"{SERVER_URL}/api/stream_frame", headers=API_HEADERS, data=data, files=files, timeout=8)
+        if _use_edge_bridge():
+            data = {
+                "camera_name": _safe_camera_name(camera_name),
+                "rule_summary": rule_summary,
+                "camera_address": camera_address or "",
+                "checks_csv": _edge_checks_csv(),
+            }
+            r = requests.post(f"{EDGE_BRIDGE_URL}/api/local/stream_frame", data=data, files=files, timeout=8)
+        else:
+            data = {**_api_scope_data(camera_name), "rule_summary": rule_summary}
+            r = requests.post(f"{SERVER_URL}/api/stream_frame", headers=API_HEADERS, data=data, files=files, timeout=8)
         if r.status_code >= 400:
-            print(f"[Stream] {camera_name}: HTTP {r.status_code} — проверьте SERVER_URL и API_TOKEN")
+            target = "EDGE_BRIDGE_URL" if _use_edge_bridge() else "SERVER_URL/API_TOKEN"
+            print(f"[Stream] {camera_name}: HTTP {r.status_code} — проверьте {target}")
     except requests.RequestException as exc:
         print(f"[Stream] {camera_name}: {exc}")
 
@@ -231,15 +344,167 @@ def send_violation(frame_bytes: bytes, violation_type: str, camera_name: str) ->
 
     try:
         files = {"image": ("violation.jpg", frame_bytes, "image/jpeg")}
-        data = {**_api_scope_data(camera_name), "violation_type": violation_type}
-        r = requests.post(f"{SERVER_URL}/api/violation", headers=API_HEADERS, data=data, files=files, timeout=10)
+        if _use_edge_bridge():
+            data = {"camera_name": _safe_camera_name(camera_name), "violation_type": violation_type}
+            r = requests.post(f"{EDGE_BRIDGE_URL}/api/local/enqueue", data=data, files=files, timeout=10)
+        else:
+            data = {**_api_scope_data(camera_name), "violation_type": violation_type}
+            r = requests.post(f"{SERVER_URL}/api/violation", headers=API_HEADERS, data=data, files=files, timeout=10)
         if r.status_code >= 400:
-            print(
-                f"[Violation] {camera_name}: HTTP {r.status_code} — на сайте не появится запись. "
-                f"Часто: неверный SERVER_URL (нужен подкаталог как ROOT_PATH на сервере), неверный API_TOKEN. Тело: {r.text[:300]}"
-            )
+            if _use_edge_bridge():
+                print(f"[Violation] {camera_name}: HTTP {r.status_code} — ошибка EDGE_BRIDGE_URL. Тело: {r.text[:300]}")
+            else:
+                print(
+                    f"[Violation] {camera_name}: HTTP {r.status_code} — на сайте не появится запись. "
+                    f"Часто: неверный SERVER_URL (нужен подкаталог как ROOT_PATH на сервере), неверный API_TOKEN. Тело: {r.text[:300]}"
+                )
     except requests.RequestException as exc:
         print(f"[Violation] {camera_name}: {exc}")
+
+
+def _should_use_pig_detection(cls_id: int, names: dict[int, str]) -> bool:
+    if PIG_COUNT_CLASS_ID is not None:
+        return cls_id == PIG_COUNT_CLASS_ID
+    if PIG_COUNT_CLASS_NAME:
+        return names.get(cls_id, "").strip().lower() == PIG_COUNT_CLASS_NAME.lower()
+    return True
+
+
+def send_pig_count_event(
+    *,
+    camera_name: str,
+    count: int,
+    ts_from: float,
+    ts_to: float,
+    preview_bytes: bytes | None,
+) -> None:
+    if count <= 0:
+        return
+    payload = {
+        "camera_name": _safe_camera_name(camera_name),
+        "count": int(count),
+        "direction": PIG_COUNT_DIRECTION,
+        "line_y_ratio": PIG_COUNT_LINE_Y_RATIO,
+        "ts_from": float(ts_from),
+        "ts_to": float(ts_to),
+    }
+    files = {}
+    if preview_bytes:
+        files = {"preview": ("pig_preview.jpg", preview_bytes, "image/jpeg")}
+    try:
+        if _use_edge_bridge():
+            r = requests.post(
+                f"{EDGE_BRIDGE_URL}/api/local/pig_count_event",
+                data={k: str(v) for k, v in payload.items()},
+                files=files or None,
+                timeout=10,
+            )
+        else:
+            r = requests.post(
+                f"{SERVER_URL}/api/pig_count",
+                headers=API_HEADERS,
+                data={**_api_scope_data(camera_name), **{k: str(v) for k, v in payload.items() if k != "camera_name"}},
+                files=files or None,
+                timeout=10,
+            )
+        if r.status_code >= 400:
+            print(f"[PigCount] {camera_name}: HTTP {r.status_code} {r.text[:250]}")
+        else:
+            print(f"[PigCount] {camera_name}: отправлено count={count}")
+    except requests.RequestException as exc:
+        print(f"[PigCount] {camera_name}: {exc}")
+
+
+def pig_count_tick(
+    *,
+    runtime: _PigCounterRuntime,
+    model: YOLO,
+    model_lock: threading.Lock,
+    frame,
+    now_ts: float,
+) -> None:
+    if (now_ts - runtime.last_infer_ts) < max(0.05, PIG_COUNT_INFER_INTERVAL_SECONDS):
+        if (
+            runtime.pending_count > 0
+            and runtime.batch_last_ts > 0
+            and (now_ts - runtime.batch_last_ts) >= max(2.0, PIG_COUNT_BATCH_GAP_SECONDS)
+        ):
+            send_pig_count_event(
+                camera_name=runtime.camera_name,
+                count=runtime.pending_count,
+                ts_from=runtime.batch_started_ts or runtime.batch_last_ts,
+                ts_to=runtime.batch_last_ts,
+                preview_bytes=runtime.last_preview_bytes,
+            )
+            runtime.pending_count = 0
+            runtime.batch_started_ts = 0.0
+            runtime.batch_last_ts = 0.0
+            runtime.last_preview_bytes = None
+        return
+
+    runtime.last_infer_ts = now_ts
+    h = int(frame.shape[0]) if getattr(frame, "shape", None) is not None else 0
+    if h <= 0:
+        return
+    line_y = int(max(0, min(h - 1, runtime.line_y_ratio * h)))
+
+    with model_lock:
+        results = model.track(
+            source=frame,
+            persist=True,
+            verbose=False,
+            conf=PIG_COUNT_CONF_THRESHOLD,
+            tracker="bytetrack.yaml",
+            device="cpu",
+        )
+    res = results[0]
+    names = res.names if isinstance(res.names, dict) else {}
+    new_crosses = 0
+    if res.boxes is not None and res.boxes.id is not None:
+        ids = res.boxes.id.int().cpu().tolist()
+        xyxy = res.boxes.xyxy.cpu().tolist()
+        cls_ids = res.boxes.cls.int().cpu().tolist()
+        for tid, box, cls_id in zip(ids, xyxy, cls_ids):
+            if not _should_use_pig_detection(int(cls_id), names):
+                continue
+            _x1, y1, _x2, y2 = box
+            cy = (y1 + y2) / 2.0
+            st = runtime.states.get(int(tid))
+            crossed = False
+            if st is not None and not st.counted:
+                crossed = st.last_cy > line_y >= cy
+            if crossed:
+                st.counted = True
+                new_crosses += 1
+            if st is None:
+                runtime.states[int(tid)] = _PigTrackState(last_cy=cy, counted=False)
+            else:
+                st.last_cy = cy
+
+    if new_crosses > 0:
+        runtime.pending_count += new_crosses
+        if runtime.batch_started_ts <= 0:
+            runtime.batch_started_ts = now_ts
+        runtime.batch_last_ts = now_ts
+        ok_prev, prev_buf = cv2.imencode(".jpg", frame)
+        runtime.last_preview_bytes = prev_buf.tobytes() if ok_prev else runtime.last_preview_bytes
+
+    if (
+        runtime.pending_count > 0
+        and runtime.batch_last_ts > 0
+        and (now_ts - runtime.batch_last_ts) >= max(2.0, PIG_COUNT_BATCH_GAP_SECONDS)
+    ):
+        send_pig_count_event(
+            camera_name=runtime.camera_name,
+            count=runtime.pending_count,
+            ts_from=runtime.batch_started_ts or runtime.batch_last_ts,
+            ts_to=runtime.batch_last_ts,
+            preview_bytes=runtime.last_preview_bytes,
+        )
+        runtime.pending_count = 0
+        runtime.batch_started_ts = 0.0
+        runtime.batch_last_ts = 0.0
+        runtime.last_preview_bytes = None
 
 
 def open_capture(source: str):
@@ -299,6 +564,9 @@ def camera_loop(
     stop_event: threading.Event,
     camera_id: int | None = None,
     rule_summary: str = "",
+    pig_runtime: _PigCounterRuntime | None = None,
+    pig_model: YOLO | None = None,
+    pig_model_lock: Any | None = None,
 ) -> None:
     try:
         src = VideoSource(source)
@@ -359,10 +627,18 @@ def camera_loop(
             frame_bytes = buffer.tobytes()
 
             now = time.time()
+            if pig_runtime is not None and pig_model is not None and pig_model_lock is not None:
+                pig_count_tick(
+                    runtime=pig_runtime,
+                    model=pig_model,
+                    model_lock=pig_model_lock,
+                    frame=frame,
+                    now_ts=now,
+                )
             if now - last_stream_sent >= STREAM_INTERVAL_SECONDS:
-                # Оптимизация: шлём стрим только если недавно (до 15 сек) был запрос от сервера
-                if now - requested_streams.get(camera_name, 0.0) < 15.0:
-                    send_stream_frame(frame_bytes, camera_name, rule_summary)
+                # Без bridge: on-demand от сервера. С bridge: отправляем для локального preview.
+                if _should_send_stream_now(camera_name, now):
+                    send_stream_frame(frame_bytes, camera_name, rule_summary, source)
                     last_stream_sent = now
 
             if has_violation and (now - last_violation_sent >= VIOLATION_COOLDOWN_SECONDS):
@@ -403,6 +679,22 @@ def run_single_camera_mode() -> None:
     if USE_TRAINED_MODEL:
         print("USE_TRAINED_MODEL: политика как в old/main.py (веса + Rules).")
     model = YOLO(YOLO_MODEL_PATH)
+    pig_runtime: _PigCounterRuntime | None = None
+    pig_model: YOLO | None = None
+    pig_model_lock: Any | None = None
+    if PIG_COUNT_ENABLED:
+        allow = _load_pig_camera_allowlist_from_db(PIG_COUNT_DB_PATH)
+        if _safe_camera_name(CAMERA_NAME) in allow:
+            pig_runtime = _PigCounterRuntime(
+                line_y_ratio=PIG_COUNT_LINE_Y_RATIO,
+                camera_name=_safe_camera_name(CAMERA_NAME),
+                states={},
+            )
+            pig_model = YOLO(PIG_COUNT_MODEL_PATH)
+            pig_model_lock = threading.Lock()
+            print(f"[PigCount] single-camera enabled: {CAMERA_NAME}, model={PIG_COUNT_MODEL_PATH}")
+        else:
+            print(f"[PigCount] {CAMERA_NAME}: не включена в pig_count_cameras, подсчет выключен.")
     try:
         src = VideoSource(CAMERA_SOURCE)
     except RuntimeError as e:
@@ -424,7 +716,7 @@ def run_single_camera_mode() -> None:
     stop_event = threading.Event()
     heartbeat_thread = threading.Thread(
         target=send_heartbeat_loop,
-        args=([CAMERA_NAME], stop_event, {CAMERA_NAME: rule_summary_single}),
+        args=([CAMERA_NAME], stop_event, {CAMERA_NAME: rule_summary_single}, {CAMERA_NAME: CAMERA_SOURCE}),
         daemon=True,
     )
     heartbeat_thread.start()
@@ -460,10 +752,18 @@ def run_single_camera_mode() -> None:
             frame_bytes = buffer.tobytes()
 
             now = time.time()
+            if pig_runtime is not None and pig_model is not None and pig_model_lock is not None:
+                pig_count_tick(
+                    runtime=pig_runtime,
+                    model=pig_model,
+                    model_lock=pig_model_lock,
+                    frame=frame,
+                    now_ts=now,
+                )
             if now - last_stream_sent >= STREAM_INTERVAL_SECONDS:
-                # Оптимизация: шлём стрим только если недавно (до 15 сек) был запрос от сервера
-                if now - requested_streams.get(CAMERA_NAME, 0.0) < 15.0:
-                    send_stream_frame(frame_bytes, CAMERA_NAME, rule_summary_single)
+                # Без bridge: on-demand от сервера. С bridge: отправляем для локального preview.
+                if _should_send_stream_now(CAMERA_NAME, now):
+                    send_stream_frame(frame_bytes, CAMERA_NAME, rule_summary_single, CAMERA_SOURCE)
                     last_stream_sent = now
 
             if has_violation and (now - last_violation_sent >= VIOLATION_COOLDOWN_SECONDS):
@@ -531,11 +831,22 @@ def run_mdb_cameras_mode() -> None:
 
     model = YOLO(YOLO_MODEL_PATH)
     model_lock = threading.Lock()
+    pig_allow: set[str] = set()
+    pig_model: YOLO | None = None
+    pig_model_lock: Any | None = None
+    if PIG_COUNT_ENABLED:
+        pig_allow = _load_pig_camera_allowlist_from_db(PIG_COUNT_DB_PATH)
+        if pig_allow:
+            pig_model = YOLO(PIG_COUNT_MODEL_PATH)
+            pig_model_lock = threading.Lock()
+            print(f"[PigCount] enabled for {len(pig_allow)} cameras, model={PIG_COUNT_MODEL_PATH}")
+        else:
+            print("[PigCount] список камер пуст — подсчет отключен.")
     stop_event = threading.Event()
 
     heartbeat_thread = threading.Thread(
         target=send_heartbeat_loop,
-        args=(names, stop_event, rule_map),
+        args=(names, stop_event, rule_map, {name: url for _cid, url, name in cameras}),
         daemon=True,
     )
     heartbeat_thread.start()
@@ -543,14 +854,24 @@ def run_mdb_cameras_mode() -> None:
     def _start_one_camera(cid: int, url: str, name: str) -> None:
         if MDB_THREAD_START_JITTER_MAX > 0:
             time.sleep(random.uniform(0, MDB_THREAD_START_JITTER_MAX))
+        pig_runtime: _PigCounterRuntime | None = None
+        if pig_model is not None and pig_model_lock is not None and _safe_camera_name(name) in pig_allow:
+            pig_runtime = _PigCounterRuntime(
+                line_y_ratio=PIG_COUNT_LINE_Y_RATIO,
+                camera_name=_safe_camera_name(name),
+                states={},
+            )
         camera_loop(
             name,
             url,
             model,
             model_lock,
             stop_event,
-            cid if (USE_TRAINED_MODEL or USE_COLOR_VIOLATIONS) else None,
-            rule_map.get(name, ""),
+            camera_id=cid if (USE_TRAINED_MODEL or USE_COLOR_VIOLATIONS) else None,
+            rule_summary=rule_map.get(name, ""),
+            pig_runtime=pig_runtime,
+            pig_model=pig_model,
+            pig_model_lock=pig_model_lock,
         )
 
     for cid, url, name in cameras:

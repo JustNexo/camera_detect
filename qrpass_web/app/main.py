@@ -10,12 +10,14 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.core.config import settings
 from sqlalchemy import text
+import asyncio
 
 from app.camera_scope import scope_key
 from app.core.database import Base, engine, SessionLocal
 from app.models import CameraPresence, SystemSettings, Violation
 from app.middleware.error_dump import DumpErrorsMiddleware, write_startup_probe
 from app.routers import api, auth, pages, stream
+from app.services.inactive_checker import check_inactive_pcs_task
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
@@ -23,6 +25,8 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     write_startup_probe()
+    # Фоновая задача контроля неактивности ПК
+    asyncio.create_task(check_inactive_pcs_task())
     # Инициализация БД и демо-данных
     Path("static/violations").mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
@@ -35,11 +39,29 @@ async def lifespan(app: FastAPI):
             col_names = {row[1] for row in rows}
             if "site_name" not in col_names:
                 conn.execute(text("ALTER TABLE violations ADD COLUMN site_name VARCHAR(256) NOT NULL DEFAULT ''"))
+            
+            rows = conn.execute(text("PRAGMA table_info(system_settings)")).fetchall()
+            col_names = {row[1] for row in rows}
+            if "pc_inactive_alert_enabled" not in col_names:
+                try:
+                    conn.execute(text("ALTER TABLE system_settings ADD COLUMN pc_inactive_alert_enabled BOOLEAN NOT NULL DEFAULT 0"))
+                    conn.execute(text("ALTER TABLE system_settings ADD COLUMN pc_inactive_threshold_hours INTEGER NOT NULL DEFAULT 24"))
+                except Exception as e:
+                    logging.error(f"Failed to add columns to system_settings: {e}")
 
     with SessionLocal() as db:
         # Проверка и создание настроек по умолчанию
         if db.query(SystemSettings).count() == 0:
             db.add(SystemSettings(email_enabled=True, target_email="admin@qrpass.local"))
+            db.commit()
+        else:
+            # Убеждаемся, что новые колонки проинициализированы, если они были добавлены ALTER TABLE
+            # (иногда SQLite оставляет их NULL, если DEFAULT не сработал для существующих строк)
+            s = db.query(SystemSettings).first()
+            if s.pc_inactive_alert_enabled is None:
+                s.pc_inactive_alert_enabled = False
+            if s.pc_inactive_threshold_hours is None:
+                s.pc_inactive_threshold_hours = 24
             db.commit()
 
         # Одна демо-запись в истории (только если SEED_DEMO_DATA=true и таблица пустая)
