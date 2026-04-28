@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Body
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from app import cameras_db, queue_db
@@ -22,7 +22,7 @@ from app.agent_loop import agent_thread_body
 from app.config import settings
 from app.hashfile import sha256_file
 from app.storage_gc import run_storage_gc
-from app.uploader import ping_selfcheck, post_heartbeat, post_stream_frame
+from app.uploader import ping_selfcheck, post_heartbeat, post_stream_frame, post_heartbeat_batch
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 _log = logging.getLogger(__name__)
@@ -406,6 +406,46 @@ def api_local_heartbeat(
         checks=checks,
     )
     return {"ok": r.ok, "http_code": r.http_code, "message": r.message[:500]}
+
+
+@app.post("/api/local/heartbeat_batch")
+async def api_local_heartbeat_batch(payload: dict = Body(...)):
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail="items must be list")
+
+    out_items: list[dict] = []
+    for it in items[:500]:
+        if not isinstance(it, dict):
+            continue
+        cam = str(it.get("camera_name") or "").strip()
+        if not cam:
+            continue
+        rule_summary = str(it.get("rule_summary") or "")
+        camera_address = str(it.get("camera_address") or "")
+        checks_csv = str(it.get("checks_csv") or "")
+        checks = [x.strip() for x in checks_csv.split(",") if x.strip()]
+        cameras_db.touch_camera_seen_with_meta(
+            _get_conn(),
+            camera_name=cam,
+            err="",
+            address=camera_address,
+            checks=checks,
+        )
+        out_items.append(
+            {
+                "camera_name": cam,
+                "site_name": settings.site_name,
+                "rule_summary": rule_summary,
+            }
+        )
+
+    if not settings.upstream_enabled:
+        return {"ok": True, "count": len(out_items), "message": "saved local (upstream disabled)"}
+
+    # Отправляем на сайт одним запросом (батч).
+    r = await asyncio.to_thread(post_heartbeat_batch, items=out_items, timeout=10.0)
+    return {"ok": r.ok, "http_code": r.http_code, "message": r.message[:500], "count": len(out_items)}
 
 
 @app.get("/api/cameras")

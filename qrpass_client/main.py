@@ -281,10 +281,35 @@ def send_heartbeat_loop(
     rm = rule_map or {}
     sm = source_map or {}
     while not stop_event.is_set():
-        for i, name in enumerate(camera_names):
-            send_heartbeat(name, rm.get(name, ""), sm.get(name, ""))
-            if i < len(camera_names) - 1 and HEARTBEAT_STAGGER_SECONDS > 0:
-                stop_event.wait(HEARTBEAT_STAGGER_SECONDS)
+        # Батч: один запрос на все камеры (резко меньше коннектов к shared hosting)
+        items = []
+        for name in camera_names:
+            items.append(
+                {
+                    "camera_name": _safe_camera_name(name),
+                    "rule_summary": rm.get(name, ""),
+                    "camera_address": sm.get(name, ""),
+                    "checks_csv": _edge_checks_csv(),
+                }
+            )
+        try:
+            if _use_edge_bridge():
+                requests.post(
+                    f"{EDGE_BRIDGE_URL}/api/local/heartbeat_batch",
+                    json={"items": items},
+                    timeout=8,
+                )
+            else:
+                # Прямо на сайт (если edge не используется)
+                requests.post(
+                    f"{SERVER_URL}/api/heartbeat_batch",
+                    headers=API_HEADERS,
+                    json={"items": [{**_api_scope_data(x['camera_name']), "rule_summary": x["rule_summary"]} for x in items]},
+                    timeout=8,
+                )
+        except requests.RequestException as exc:
+            print(f"[HeartbeatBatch] {exc}")
+
         stop_event.wait(HEARTBEAT_INTERVAL_SECONDS)
 
 

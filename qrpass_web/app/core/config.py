@@ -62,7 +62,7 @@ class Settings:
     # Жёсткий TTL одного live-stream соединения (сек), затем клиент переподключится.
     stream_live_max_seconds: int = int(os.getenv("STREAM_LIVE_MAX_SECONDS", "600"))
     # Дашборд: сколько строк истории поднимать из БД (меньше — меньше памяти на запрос).
-    dashboard_violations_limit: int = int(os.getenv("DASHBOARD_VIOLATIONS_LIMIT", "80"))
+    dashboard_violations_limit: int = int(os.getenv("DASHBOARD_VIOLATIONS_LIMIT", "700"))
     # POST /api/violation: макс. размер файла нарушения (байты).
     violation_upload_max_bytes: int = int(os.getenv("VIOLATION_UPLOAD_MAX_BYTES", str(6 * 1024 * 1024)))
 

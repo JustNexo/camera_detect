@@ -73,6 +73,21 @@ def post_heartbeat(*, camera_name: str, site_name: str, rule_summary: str = "", 
     return UploadResult(False, r.status_code, (r.text or r.reason or "error")[:2000])
 
 
+def post_heartbeat_batch(*, items: list[dict], timeout: float = 20.0) -> UploadResult:
+    if not settings.api_token:
+        return UploadResult(False, None, "API_TOKEN пуст")
+    url = _api_url("heartbeat_batch")
+    headers = {"X-API-Token": settings.api_token, "Content-Type": "application/json"}
+    payload = {"items": items}
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    except requests.RequestException as e:
+        return UploadResult(False, None, str(e)[:2000])
+    if r.status_code == 200:
+        return UploadResult(True, 200, (r.text or "")[:1000])
+    return UploadResult(False, r.status_code, (r.text or r.reason or "error")[:2000])
+
+
 def post_stream_frame(
     *,
     frame_path: Path,

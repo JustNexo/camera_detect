@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.camera_scope import scope_key
@@ -18,6 +19,16 @@ router = APIRouter(prefix="/api", tags=["api"])
 
 
 last_db_write: dict[str, float] = {}
+
+
+class HeartbeatItem(BaseModel):
+    camera_name: str
+    site_name: str = ""
+    rule_summary: str = ""
+
+
+class HeartbeatBatch(BaseModel):
+    items: list[HeartbeatItem]
 
 def _upsert_camera_presence(db: Session, key: str, rule_summary: str) -> None:
     """Обновление last_seen и (опционально) правила — одна БД для всех воркеров."""
@@ -45,7 +56,7 @@ def _upsert_camera_presence(db: Session, key: str, rule_summary: str) -> None:
                     rule_summary=rs or "Правило не передано",
                 )
             )
-        db.commit()
+        # commit делается снаружи (в heartbeat_batch) или одинарно (в heartbeat)
     except Exception as e:
         db.rollback()
         # Если база залочена, просто пропускаем эту запись, запишем в следующий раз
@@ -135,6 +146,11 @@ def heartbeat(
     if (rule_summary or "").strip():
         camera_rules[key] = rule_summary.strip()
     _upsert_camera_presence(db, key, rule_summary)
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Warning: Failed to update camera presence in DB: {e}")
 
     stream_requested = is_stream_requested(key)
 
@@ -145,6 +161,38 @@ def heartbeat(
         "scope_key": key,
         "stream_requested": stream_requested,
     }
+
+
+@router.post("/heartbeat_batch", dependencies=[Depends(verify_api_token)])
+def heartbeat_batch(payload: HeartbeatBatch, db: Session = Depends(get_db)):
+    now = datetime.now(timezone.utc)
+    out: list[dict[str, object]] = []
+    # Одно DB-commit на весь батч (резко меньше блокировок/процессов).
+    for it in payload.items[:500]:
+        cam = (it.camera_name or "").strip()
+        if not cam:
+            continue
+        site = (it.site_name or "").strip()
+        rs = (it.rule_summary or "").strip()
+        key = scope_key(site, cam)
+        camera_status[key] = now
+        if rs:
+            camera_rules[key] = rs
+        _upsert_camera_presence(db, key, rs)
+        out.append(
+            {
+                "camera_name": cam,
+                "site_name": site,
+                "scope_key": key,
+                "stream_requested": bool(is_stream_requested(key)),
+            }
+        )
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Warning: Failed to update camera presence in DB: {e}")
+    return {"ok": True, "count": len(out), "items": out}
 
 
 @router.post("/stream_frame", dependencies=[Depends(verify_api_token)])

@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Request, Form
 from fastapi.responses import RedirectResponse
@@ -22,6 +22,14 @@ def normalize_to_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def format_msk(dt: datetime | None, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+    if dt is None:
+        return "—"
+    # MSK = UTC+3, без перехода на летнее/зимнее время.
+    msk_tz = timezone(timedelta(hours=3))
+    return normalize_to_utc(dt).astimezone(msk_tz).strftime(fmt)
 
 
 def _site_query_param_for_stream(parsed_site: str) -> str:
@@ -87,7 +95,7 @@ def dashboard(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    lim = max(10, min(500, int(getattr(settings, "dashboard_violations_limit", 80))))
+    lim = max(10, min(700, int(getattr(settings, "dashboard_violations_limit", 700))))
     violations = db.query(Violation).order_by(Violation.timestamp.desc()).limit(lim).all()
 
     # Расчет метрик (KPI)
@@ -112,6 +120,8 @@ def dashboard(
         {
             "user": current_user,
             "violations": violations,
+            "violations_limit": lim,
+            "fmt_msk": format_msk,
             "today_violations_count": today_violations_count,
             "active_cameras_count": active_cameras_count,
             "attention_cameras_count": attention_cameras_count,
@@ -187,7 +197,7 @@ def pig_count_page(
             q = q.filter(PigCountEvent.ts_from <= dt_to)
         except ValueError:
             pass
-    events = q.order_by(PigCountEvent.ts_to.desc()).limit(500).all()
+    events = q.order_by(PigCountEvent.ts_to.desc()).limit(700).all()
     total_count = sum(int(e.count or 0) for e in events)
 
     return templates.TemplateResponse(
@@ -197,6 +207,7 @@ def pig_count_page(
             "user": current_user,
             "events": events,
             "total_count": total_count,
+            "fmt_msk": format_msk,
             "date_from": date_from,
             "date_to": date_to,
             "site_name": site_name,

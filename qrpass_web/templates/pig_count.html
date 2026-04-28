@@ -34,14 +34,14 @@
                 <tbody>
                     {% for e in events %}
                     <tr class="border-b border-slate-100">
-                        <td class="px-4 py-3">{{ e.created_at.strftime("%Y-%m-%d %H:%M:%S") if e.created_at else "-" }}</td>
+                        <td class="px-4 py-3">{{ fmt_msk(e.created_at) }}</td>
                         <td class="px-4 py-3">{{ e.site_name or "—" }}</td>
                         <td class="px-4 py-3">{{ e.camera_name }}</td>
                         <td class="px-4 py-3 font-semibold">{{ e.count }}</td>
                         <td class="px-4 py-3">
-                            {{ e.ts_from.strftime("%H:%M:%S") if e.ts_from else "-" }}
+                            {{ fmt_msk(e.ts_from, "%H:%M:%S") }}
                             →
-                            {{ e.ts_to.strftime("%H:%M:%S") if e.ts_to else "-" }}
+                            {{ fmt_msk(e.ts_to, "%H:%M:%S") }}
                         </td>
                         <td class="px-4 py-3">
                             {% if e.preview_path %}
