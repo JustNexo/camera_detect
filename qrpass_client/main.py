@@ -35,6 +35,9 @@ STREAM_INTERVAL_SECONDS = float(os.getenv("STREAM_INTERVAL_SECONDS", "0.5"))
 HEARTBEAT_INTERVAL_SECONDS = float(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "5"))
 # Пауза между камерами в одном цикле heartbeat (снимает «салvo» запросов).
 HEARTBEAT_STAGGER_SECONDS = float(os.getenv("HEARTBEAT_STAGGER_SECONDS", "0.35"))
+# Отправлять heartbeat только по камерам, где недавно удалось получить кадр.
+# Защищает от ложного online и лишних запросов при недоступных камерах.
+HEARTBEAT_ACTIVE_CAMERA_TTL_SECONDS = float(os.getenv("HEARTBEAT_ACTIVE_CAMERA_TTL_SECONDS", "25"))
 # Как в old/main.py: пауза после полного цикла «кадр → инференс → отправка» (снижает частоту HTTP).
 CYCLE_PAUSE_SECONDS = float(os.getenv("CYCLE_PAUSE_SECONDS", "2"))
 # Сохранять ли нарушения локально на диске клиента
@@ -42,6 +45,8 @@ SAVE_VIOLATIONS_LOCALLY = os.getenv("SAVE_VIOLATIONS_LOCALLY", "false").strip().
 
 # Оптимизация: когда сервер просит стрим (time.time() последнего запроса от сервера)
 requested_streams: dict[str, float] = {}
+last_frame_ok_ts: dict[str, float] = {}
+last_frame_ok_lock = threading.Lock()
 # Режим mdb: случайная задержка перед стартом потока камеры (разносит пики по времени).
 MDB_THREAD_START_JITTER_MAX = float(os.getenv("MDB_THREAD_START_JITTER_MAX", "2"))
 USE_MDB_CAMERAS = os.getenv("USE_MDB_CAMERAS", "").strip().lower() in ("1", "true", "yes")
@@ -281,9 +286,20 @@ def send_heartbeat_loop(
     rm = rule_map or {}
     sm = source_map or {}
     while not stop_event.is_set():
+        now = time.time()
+        with last_frame_ok_lock:
+            active_names = [
+                name
+                for name in camera_names
+                if (now - last_frame_ok_ts.get(name, 0.0)) <= max(2.0, HEARTBEAT_ACTIVE_CAMERA_TTL_SECONDS)
+            ]
+        if not active_names:
+            stop_event.wait(HEARTBEAT_INTERVAL_SECONDS)
+            continue
+
         # Батч: один запрос на все камеры (резко меньше коннектов к shared hosting)
         items = []
-        for name in camera_names:
+        for name in active_names:
             items.append(
                 {
                     "camera_name": _safe_camera_name(name),
@@ -629,6 +645,8 @@ def camera_loop(
                     print(f"[{camera_name}] Кадр не получен, повтор...")
                 time.sleep(0.2)
                 continue
+            with last_frame_ok_lock:
+                last_frame_ok_ts[camera_name] = time.time()
 
             if USE_TRAINED_MODEL:
                 with model_lock:
